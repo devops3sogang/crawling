@@ -1,61 +1,59 @@
-import undetected_chromedriver as uc
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
+import requests
 from datetime import datetime, timedelta
+import json  # JSON 라이브러리를 가져옵니다.
 
 # --- 1. 날짜 계산 (이번 주 월요일 ~ 금요일) ---
+#today = datetime.now()
+#monday = today - timedelta(days=today.weekday())
+#friday = monday + timedelta(days=4)
+#start_date_str = monday.strftime('%Y.%m.%d')
+#end_date_str = friday.strftime('%Y.%m.%d')
+
+
+# 연휴로 식당메뉴가 없어 디버깅용
+# --- 1. 날짜 계산 (지난 주 월요일 ~ 금요일) ---
 today = datetime.now()
-monday = today - timedelta(days=today.weekday())
+a_day_in_last_week = today - timedelta(days=7) # 오늘 날짜에서 7일을 뺌
+monday = a_day_in_last_week - timedelta(days=a_day_in_last_week.weekday())
 friday = monday + timedelta(days=4)
 start_date_str = monday.strftime('%Y.%m.%d')
 end_date_str = friday.strftime('%Y.%m.%d')
 
-# --- 2. 방문할 URL 설정 ---
-# 이번 주의 메뉴 페이지 주소를 직접 방문
-url = f"https://www.sogang.ac.kr/ko/menu-life-info?startDate={start_date_str}&endDate={end_date_str}"
+# --- 2. 세션 및 헤더 설정 ---
+session = requests.Session()
+headers = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36',
+    'Referer': 'https://www.sogang.ac.kr/ko/menu-life-info'
+}
+session.headers.update(headers)
 
-driver = None
+# --- 3. API 주소 및 Payload 정의 ---
+api_url = "https://www.sogang.ac.kr/api/api/v1/mainKo/menuList"
+payload = {
+    'configId': 1,
+    'stDate': start_date_str,
+    'enDate': end_date_str
+}
+
 try:
-    print("봇 탐지 우회 드라이버를 시작합니다...")
-    options = uc.ChromeOptions()
-    # options.add_argument('--headless') # 필요시 주석 해제하여 백그라운드 실행
-    driver = uc.Chrome(options=options)
+    print(f"API({api_url})에 POST 방식으로 데이터를 요청합니다...")
     
-    print(f"이번 주 메뉴 페이지({url})에 접속합니다...")
-    driver.get(url)
+    response = session.post(api_url, json=payload)
+    response.raise_for_status()
+    raw_data = response.json()
 
-    print("메뉴가 로드될 때까지 대기합니다...")
-    wait = WebDriverWait(driver, 20)
+    # --- 4. JSON 파일로 저장 ---
+    # 'menu.json' 파일을 쓰기('w') 모드로 열고, 인코딩은 'utf-8'로 설정
+    with open('menu.json', 'w', encoding='utf-8') as f:
+        # json.dump()를 사용하여 파이썬 딕셔너리(raw_data)를 파일(f)에 저장
+        # ensure_ascii=False: 한글이 깨지지 않게 해주는 중요한 옵션
+        # indent=4: 보기 좋게 4칸씩 들여쓰기해서 저장
+        json.dump(raw_data, f, ensure_ascii=False, indent=4)
     
-    # '.menu-list' 영역이 화면에 나타날 때까지 기다림
-    wait.until(EC.presence_of_element_located((By.CLASS_NAME, "menu-list")))
+    print("\n'menu.json' 파일 저장이 완료되었습니다.")
     
-    print("메뉴 정보 추출을 시작합니다...")
-    
-    # XPath를 사용하여 '우정원' 텍스트를 포함하는 restaurant-name div의 부모인 restaurant div를 찾음
-    woojungwon_xpath = "//div[contains(@class, 'restaurant-name') and contains(text(), '우정원')]/ancestor::div[contains(@class, 'restaurant')]"
-    woojungwon_restaurant = wait.until(EC.presence_of_element_located((By.XPATH, woojungwon_xpath)))
 
-    if woojungwon_restaurant:
-        print(f"\n--- 우정원 주간 메뉴 ({start_date_str} ~ {end_date_str}) ---")
-        # Selenium의 내장 기능을 사용하여 메뉴 아이템들을 직접 찾음
-        menu_items = woojungwon_restaurant.find_elements(By.CLASS_NAME, "menu-item")
-        if not menu_items:
-            print("등록된 메뉴가 없습니다.")
-        else:
-            for item in menu_items:
-                menu_date = item.find_element(By.CLASS_NAME, "menu-date").text
-                menu_name = item.find_element(By.CLASS_NAME, "menu-name").text
-                menu_price = item.find_element(By.CLASS_NAME, "menu-price").text
-                print(f"[{menu_date}] {menu_name} ({menu_price})")
-    else:
-        print("이번 주의 우정원 메뉴 정보를 찾을 수 없습니다.")
-
+except requests.exceptions.RequestException as e:
+    print(f"웹사이트 접속 중 오류가 발생했습니다: {e}")
 except Exception as e:
-    print(f"오류가 발생했습니다: {e}")
-
-finally:
-    if driver:
-        print("\n드라이버를 종료합니다.")
-        driver.quit()
+    print(f"데이터 처리 중 오류가 발생했습니다: {e}")
