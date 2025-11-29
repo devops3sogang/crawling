@@ -1,119 +1,114 @@
-# -*- coding: utf-8 -*-
 import requests
 from datetime import datetime, timedelta
-import json
-import calendar
 
-# --- 날짜 계산 및 설정 ---
+BACKEND_API = "http://localhost:8080/api/on-campus-menus"
 
-# 연휴로 식당메뉴가 없어 디버깅용 (지난 주 월요일 ~ 금요일)
+# --- 날짜 계산 (이번 주 월요일~금요일) ---
 today = datetime.now()
-a_day_in_last_week = today - timedelta(days=7) 
-monday = a_day_in_last_week - timedelta(days=a_day_in_last_week.weekday())
+monday = today - timedelta(days=today.weekday())
 friday = monday + timedelta(days=4)
+start_date_str = monday.strftime('%Y.%m.%d')
+end_date_str = friday.strftime('%Y.%m.%d')
 
-# MongoDB 스키마에 사용할 날짜 형식
-week_start_date_str = monday.strftime('%Y-%m-%d')
-api_start_date_str = monday.strftime('%Y.%m.%d')
-api_end_date_str = friday.strftime('%Y.%m.%d')
-
-# 요일 한글 매핑
-WEEKDAY_KR = ['월', '화', '수', '목', '금', '토', '일']
-
-# --- 세션 및 API 정의 ---
 session = requests.Session()
-headers = {
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36',
-    'Referer': 'https://www.sogang.ac.kr/ko/menu-life-info'
-}
-session.headers.update(headers)
+session.headers.update({
+    "Content-Type": "application/json",
+    "User-Agent": "Mozilla/5.0",
+    "Referer": "https://www.sogang.ac.kr/ko/menu-life-info"
+})
 
-api_url = "https://www.sogang.ac.kr/api/api/v1/mainKo/menuList"
+API_URL = "https://www.sogang.ac.kr/api/api/v1/mainKo/menuList"
 payload = {
-    'configId': 1,
-    'stDate': api_start_date_str,
-    'enDate': api_end_date_str
+    "configId": 1,
+    "stDate": start_date_str,
+    "enDate": end_date_str
 }
 
-try:
-    print(f"API({api_url})에 POST 방식으로 데이터를 요청합니다...")
-    
-    response = session.post(api_url, json=payload)
-    response.raise_for_status()
-    raw_data = response.json()
+def crawl_on_campus():
+    try:
+        print(f"요청 → {API_URL}")
+        response = session.post(API_URL, json=payload)
+        response.raise_for_status()
 
-    # --- 4. 데이터 정리 및 MongoDB 형식 변환 ---
-    
-    # 4-1. 식당 고정 정보 (restaurants 컬렉션용)
-    # MongoDB ObjectID 등은 DB 삽입 시 자동으로 생성되므로 여기에 포함하지 않습니다.
-    origin_info = raw_data['data']['origin'].replace('<br>\n', '\n').replace('<br>', '\n').strip()
+        raw = response.json()
+        menus = raw.get("data", {}).get("menuList", [])
 
-    restaurant_info = {
-        "name": "우정원",
-        "type": "ON_CAMPUS",
-        "category": "학생식당",
-        "address": "서울특별시 마포구 백범로 35",
-        "location": {
-            "type": "Point",
-            "coordinates": [126.9410, 37.5509]
-        },
-        # MongoDB 템플릿에 맞추기 위해 origin 정보를 별도 필드로 추가
-        "origin_data": origin_info 
+        if not menus:
+            print("❌ menuList 없음")
+            return []
+
+        result = {
+            "weekStartDate": monday.strftime('%Y-%m-%d'),
+            "menus": []
+        }
+
+        for day in menus:
+            date = day.get("menuDate")
+            for info in day.get("menuInfo", []):
+                items = (
+                    info.get("menu", "")
+                    .replace("<br>", "\n")
+                    .replace("<br/>", "\n")
+                    .split("\n")
+                )
+                items = [x.strip() for x in items if x.strip()]
+
+                result["menus"].append({
+                    "date": date,
+                    "category": info.get("category"),
+                    "items": items
+                })
+
+        return result
+
+    except Exception as e:
+        print(f"크롤링 실패: {e}")
+        return []
+
+
+def save_to_backend(crawled_data):
+    headers = {
+        "Content-Type": "application/json"
     }
 
-    # 4-2. 메뉴 리스트 (menus 컬렉션용)
-    daily_menus = []
-    
-    for day_menu in raw_data['data']['menuList']:
-        # 날짜 포맷팅: 'YYYY.MM.DD' -> 'YYYY-MM-DD'
-        date_obj = datetime.strptime(day_menu['menuDate'], '%Y.%m.%d')
-        date_str = date_obj.strftime('%Y-%m-%d')
-        day_of_week_kr = WEEKDAY_KR[date_obj.weekday()]
-
-        meals_data = []
-        for category_info in day_menu['menuInfo']:
-            # <br> 태그를 기준으로 메뉴를 리스트로 분리하고, 공백/탭/빈 문자열 제거
-            menu_items = [
-                item.strip() 
-                for item in category_info['menu'].split('<br>') 
-                if item.strip()
-            ]
-            
-            meals_data.append({
-                "corner": category_info['category'],
-                "items": menu_items
-            })
-        
-        # dailyMenus 배열의 객체 생성
-        daily_menus.append({
-            "date": date_str,
-            "dayOfWeek": day_of_week_kr,
-            "meals": meals_data
-        })
-
-    # MongoDB Menu Collection의 최종 스키마에 맞춥니다.
-    weekly_menus_data = {
-        # **주의: restaurantId는 DB 삽입 후 알 수 있으므로, 임시로 0을 넣어둡니다.**
-        "restaurantId": 0, 
-        "restaurantName": "우정원",
-        "weekStartDate": week_start_date_str,
-        "dailyMenus": daily_menus
+    menu_doc = {
+        "restaurantId": "MAIN_CAMPUS",  # 적절한 ID 설정
+        "restaurantName": "서강대학교 학생식당",
+        "weekStartDate": crawled_data["weekStartDate"],
+        "dailyMenus": [
+            {
+                "date": menu["date"].replace(".", "-"),  # 형식 통일
+                "category": menu["category"],
+                "items": menu["items"]
+            }
+            for menu in crawled_data["menus"]
+        ]
     }
     
-    # --- 5. JSON 파일로 저장 ---
+    print(f"📤 전송할 데이터: {menu_doc}")
+    print(f"📍 요청 URL: {BACKEND_API}")
 
-    # 식당 고정 정보 저장
-    with open('restaurant_info.json', 'w', encoding='utf-8') as f:
-        json.dump(restaurant_info, f, ensure_ascii=False, indent=4)
-    print("\n'restaurant_info.json' 파일 저장이 완료되었습니다. (식당 고정 정보)")
+    try:
+        res = requests.post(BACKEND_API, json=menu_doc, timeout=10)
+        print(f"📊 Status Code: {res.status_code}")
+        print(f"📄 Response Headers: {res.headers}")
+        print(f"📝 Response Body: {res.text}")
+        res.raise_for_status()
+        print("✅ 저장 성공")
+    except requests.exceptions.HTTPError as e:
+        print(f"❌ HTTP 에러: {e}")
+        print(f"Response: {res.text}")
+    except Exception as e:
+        print(f"❌ 저장 실패: {e}")
 
-    # 주간 메뉴 리스트 저장
-    with open('weekly_menus.json', 'w', encoding='utf-8') as f:
-        json.dump(weekly_menus_data, f, ensure_ascii=False, indent=4)
-    print("'weekly_menus.json' 파일 저장이 완료되었습니다. (주간 메뉴 목록)")
+def main():
+    menu_doc = crawl_on_campus()
+    if not menu_doc:
+        print("저장할 메뉴 없음 (크롤링 실패 or 데이터 없음)")
+        return
+
+    save_to_backend(menu_doc)
 
 
-except requests.exceptions.RequestException as e:
-    print(f"웹사이트 접속 중 오류가 발생했습니다: {e}")
-except Exception as e:
-    print(f"데이터 처리 중 오류가 발생했습니다: {e}")
+if __name__ == "__main__":
+    main()
