@@ -67,26 +67,29 @@ def crawl_on_campus():
 
 
 def save_to_backend(crawled_data):
-    headers = {
-        "Content-Type": "application/json"
-    }
-
     menu_doc = {
         "restaurantId": "MAIN_CAMPUS",  # 적절한 ID 설정
         "restaurantName": "서강대학교 학생식당",
         "weekStartDate": crawled_data["weekStartDate"],
-        "dailyMenus": [
-            {
-                "date": menu["date"].replace(".", "-"),  # 형식 통일
-                "category": menu["category"],
-                "items": menu["items"]
-            }
-            for menu in crawled_data["menus"]
-        ]
+        "dailyMenus": []
     }
+
+    for day in crawled_data["menus"]:
+        daily_menu = {
+            "date": day["date"].replace(".", "-"),
+            "dayOfWeek": "",
+            "meals": [
+                {
+                    "corner": "",
+                    "category": day["category"],
+                    "items": day["items"],
+                    "price": 0
+                }
+            ]
+        }
+        menu_doc["dailyMenus"].append(daily_menu)
     
     print(f"📤 전송할 데이터: {menu_doc}")
-    print(f"📍 요청 URL: {BACKEND_API}")
 
     try:
         res = requests.post(BACKEND_API, json=menu_doc, timeout=10)
