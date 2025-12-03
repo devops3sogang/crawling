@@ -1,5 +1,6 @@
 import requests
 from datetime import datetime, timedelta
+from collections import defaultdict
 
 BACKEND_API = "http://localhost:8080/api/on-campus-menus"
 
@@ -9,6 +10,17 @@ monday = today - timedelta(days=today.weekday())
 friday = monday + timedelta(days=4)
 start_date_str = monday.strftime('%Y.%m.%d')
 end_date_str = friday.strftime('%Y.%m.%d')
+
+# 요일 한글 매핑
+WEEKDAY_KOR = {
+    0: "월요일",
+    1: "화요일",
+    2: "수요일",
+    3: "목요일",
+    4: "금요일",
+    5: "토요일",
+    6: "일요일"
+}
 
 session = requests.Session()
 session.headers.update({
@@ -34,16 +46,20 @@ def crawl_on_campus():
         menus = raw.get("data", {}).get("menuList", [])
 
         if not menus:
-            print("❌ menuList 없음")
-            return []
+            print("[오류] menuList 없음")
+            return None
 
-        result = {
-            "weekStartDate": monday.strftime('%Y-%m-%d'),
-            "menus": []
-        }
+        # 날짜별로 메뉴를 그룹화
+        daily_menus_dict = defaultdict(list)
 
         for day in menus:
-            date = day.get("menuDate")
+            date_str = day.get("menuDate", "")  # YYYY.MM.DD 형식
+            if not date_str:
+                continue
+
+            # 날짜 형식 변환: YYYY.MM.DD → YYYY-MM-DD
+            date_normalized = date_str.replace(".", "-")
+
             for info in day.get("menuInfo", []):
                 items = (
                     info.get("menu", "")
@@ -53,56 +69,63 @@ def crawl_on_campus():
                 )
                 items = [x.strip() for x in items if x.strip()]
 
-                result["menus"].append({
-                    "date": date,
-                    "category": info.get("category"),
-                    "items": items
-                })
+                if items:  # 메뉴 항목이 있을 때만 추가
+                    daily_menus_dict[date_normalized].append({
+                        "corner": "",
+                        "category": info.get("category", ""),
+                        "items": items,
+                        "price": 0
+                    })
+
+        # DailyMenu 리스트 생성
+        daily_menus = []
+        for date_str in sorted(daily_menus_dict.keys()):
+            # 날짜로부터 요일 계산
+            date_obj = datetime.strptime(date_str, '%Y-%m-%d')
+            day_of_week = WEEKDAY_KOR[date_obj.weekday()]
+
+            daily_menus.append({
+                "date": date_str,
+                "dayOfWeek": day_of_week,
+                "meals": daily_menus_dict[date_str]
+            })
+
+        result = {
+            "weekStartDate": monday.strftime('%Y-%m-%d'),
+            "dailyMenus": daily_menus
+        }
 
         return result
 
     except Exception as e:
         print(f"크롤링 실패: {e}")
-        return []
+        import traceback
+        traceback.print_exc()
+        return None
 
 
 def save_to_backend(crawled_data):
     menu_doc = {
-        "restaurantId": "MAIN_CAMPUS",  # 적절한 ID 설정
-        "restaurantName": "서강대학교 학생식당",
+        "restaurantId": "MAIN_CAMPUS",
+        "restaurantName": "서강대학교 우정원 학생식당",
         "weekStartDate": crawled_data["weekStartDate"],
-        "dailyMenus": []
+        "dailyMenus": crawled_data["dailyMenus"]
     }
 
-    for day in crawled_data["menus"]:
-        daily_menu = {
-            "date": day["date"].replace(".", "-"),
-            "dayOfWeek": "",
-            "meals": [
-                {
-                    "corner": "",
-                    "category": day["category"],
-                    "items": day["items"],
-                    "price": 0
-                }
-            ]
-        }
-        menu_doc["dailyMenus"].append(daily_menu)
-    
-    print(f"📤 전송할 데이터: {menu_doc}")
+    print(f"[전송] 데이터: {menu_doc}")
 
     try:
         res = requests.post(BACKEND_API, json=menu_doc, timeout=10)
-        print(f"📊 Status Code: {res.status_code}")
-        print(f"📄 Response Headers: {res.headers}")
-        print(f"📝 Response Body: {res.text}")
+        print(f"[응답] Status Code: {res.status_code}")
+        print(f"[응답] Headers: {res.headers}")
+        print(f"[응답] Body: {res.text}")
         res.raise_for_status()
-        print("✅ 저장 성공")
+        print("[성공] 저장 완료")
     except requests.exceptions.HTTPError as e:
-        print(f"❌ HTTP 에러: {e}")
+        print(f"[오류] HTTP 에러: {e}")
         print(f"Response: {res.text}")
     except Exception as e:
-        print(f"❌ 저장 실패: {e}")
+        print(f"[오류] 저장 실패: {e}")
 
 def main():
     menu_doc = crawl_on_campus()
