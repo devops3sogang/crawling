@@ -62,17 +62,29 @@ def crawl_on_campus():
             date_normalized = date_str.replace(".", "-")
 
             for info in day.get("menuInfo", []):
-                items = (
+                raw_items = (
                     info.get("menu", "")
                     .replace("<br>", "\n")
                     .replace("<br/>", "\n")
                     .split("\n")
                 )
-                items = [x.strip() for x in items if x.strip()]
+
+                items = []
+                for line in raw_items:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    if line.startswith("[") and line.endswith("]"):
+                        continue
+                    if len(line) <= 2 and not any(ch.isalnum() for ch in line):
+                        continue
+                    if "운영없음" in line or "운영 없음" in line:
+                        continue
+                    items.append(line)
 
                 if items:  # 메뉴 항목이 있을 때만 추가
                     daily_menus_dict[date_normalized].append({
-                        "category": info.get("category", ""),
+                        "category": info.get("category", "").strip(),
                         "items": [
                             { "id": str(uuid.uuid4()), "name": item, "price": 0 }
                             for item in items
