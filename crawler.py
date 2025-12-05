@@ -1,6 +1,7 @@
 import requests
 from datetime import datetime, timedelta
 from collections import defaultdict
+import uuid
 
 BACKEND_API = "http://localhost:8080/api/on-campus-menus"
 
@@ -71,9 +72,11 @@ def crawl_on_campus():
 
                 if items:  # 메뉴 항목이 있을 때만 추가
                     daily_menus_dict[date_normalized].append({
-                        "corner": "",
                         "category": info.get("category", ""),
-                        "items": items,
+                        "items": [
+                            { "id": str(uuid.uuid4()), "name": item, "price": 0 }
+                            for item in items
+                        ],
                         "price": 0
                     })
 
